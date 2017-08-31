@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import aiohttp
 import argparse
 import asyncio
@@ -40,17 +42,6 @@ email_password = None
 email_recipient = None
 email_sender = None
 
-def read_file(file):
-    with file.open() as f:
-        for line in f:
-            # if line is empty, continue
-            if not line:
-                continue
-
-            # normalize the string to upper case + trimmed
-            course = line.replace('\n', '').strip().upper()
-            courses_to_search.append(course)
-
 def parser():
     parser = argparse.ArgumentParser(description='Get notified when a UBC course seat is available')
     parser.add_argument('-ep', '--email_password', type=str, help='Your email password')
@@ -62,53 +53,94 @@ def parser():
     parser.add_argument('-t', '--token', type=str, help='Your Twilio authentication token')
     return parser
 
+def read_file(file):
+    with file.open() as f:
+        for line in f:
+            # if line is empty, continue
+            if not line:
+                continue
+
+            # normalize the string to upper case + trimmed
+            course = line.replace('\n', '').strip().upper()
+            courses_to_search.append(course)
+
+def select_smtp_address(email_sender):
+    split_email = email_sender.split('@')
+    email_domain = split_email[1].lower()
+
+    return {
+        'aol.com': 'smtp.aol.com',
+        'comcast.net': 'smtp.comcast.net',
+        'gmail.com': 'smtp.gmail.com',
+        'hotmail.com': 'smtp.live.com',
+        'live.ca': 'smtp.live.com',
+        'live.com': 'smtp.live.com',
+        'outlook.com': 'smtp.live.com',
+        'verizon.net': 'outgoing.verizon.net',
+        'yahoo.com': 'mail.yahoo.com',
+    }.get(email_domain, '')
+
 def validate_cmd_args(cmd_args):
+    print(cmd_args)
     email_args_count = 0
 
-    if 'ep' in cmd_args and cmd_args.ep:
+    if 'email_password' in cmd_args and cmd_args.email_password:
         email_args_count += 1
 
-    if 'er' in cmd_args and cmd_args.er:
+    if 'email_recipient' in cmd_args and cmd_args.email_recipient:
         email_args_count += 1
 
-    if 'es' in cmd_args and cmd_args.es:
+    if 'email_sender' in cmd_args and cmd_args.email_sender:
         email_args_count += 1
 
     if email_args_count == 3:
         global has_email_option, email_password, email_recipient, email_sender
         has_email_option = True
-        email_password = cmd_args.ep
-        email_recipient = cmd_args.er
-        email_sender = cmd_args.es
+        email_password = cmd_args.email_password
+        email_recipient = cmd_args.email_recipient
+        email_sender = cmd_args.email_sender
     elif email_args_count > 0 and email_args_count < 3:
         raise ValueError('One or more of the following arguments are missing: email password, sender or recipient')
 
     sms_args_count = 0
 
-    if 'sid' in cmd_args and cmd_args.sid:
+    if 'secret_id' in cmd_args and cmd_args.secret_id:
         sms_args_count += 1
 
-    if 'sr' in cmd_args and cmd_args.sr:
+    if 'sms_recipient' in cmd_args and cmd_args.sms_recipient:
         sms_args_count += 1
 
-    if 'ss' in cmd_args and cmd_args.ss:
+    if 'sms_sender' in cmd_args and cmd_args.sms_sender:
         sms_args_count += 1
 
-    if 't' in cmd_args and cmd_args.t:
+    if 'token' in cmd_args and cmd_args.token:
         sms_args_count += 1
 
     if sms_args_count == 4:
         global has_sms_option, secret_id, sms_recipient, sms_sender, twilio_auth_token
         has_sms_option = True
-        secret_id = cmd_args.sid
-        sms_recipient = cmd_args.sr
-        sms_sender = cmd_args.ss
-        twilio_auth_token = cmd_args.t
+        secret_id = cmd_args.secret_id
+        sms_recipient = cmd_args.sms_recipient
+        sms_sender = cmd_args.sms_sender
+        twilio_auth_token = cmd_args.token
     elif sms_args_count > 0 and sms_args_count < 4:
         raise ValueError('Missing either the Twilio auth token, Twio Secret ID, SMS Sender or the SMS Recipient')
 
     if email_args_count == 0 and sms_args_count == 0:
         raise ValueError('No command arguments specified.')
+
+async def crawl():
+        # Create a client session
+    async with aiohttp.ClientSession() as session:
+        # Wrap the coroutines as Future objects and put them into a list.
+        # Then, pass the list as tasks to be run.
+        tasks = []
+        for course in courses_to_search:
+            task = asyncio.ensure_future(fetch(session, start_url, course, course.split(' ')[0], course.split(' '), 0))
+            #print(course)
+            tasks.append(task)
+
+        await asyncio.gather(*tasks)
 
 async def fetch(session, url, course, text_to_find, course_name_split, count):
     # timeout if no response in 10 seconds
@@ -171,7 +203,28 @@ async def send_sms(course):
         body='A spot is available in {}.'.format(course)
     )
 
-async def main():
+def main():
+    # Set up the parser
+    cmd_parser = parser()
+    cmd_args = cmd_parser.parse_args()
+    print(cmd_args)
+
+    # Validate command arguments
+    validate_cmd_args(cmd_args)
+
+    if has_sms_option:
+        global client
+        client = Client(secret_id, twilio_auth_token)
+
+    if has_email_option:
+        global email_server
+        email_server = smtplib.SMTP(
+            select_smtp_address(email_sender),
+            587
+        )
+        email_server.starttls()
+        email_server.login(email_sender, email_password)
+
     courses = Path('./courses.txt')
 
     # Check whether courses.txt is defined
@@ -182,34 +235,11 @@ async def main():
     # Read the file and put the courses into a list
     read_file(courses)
 
-    # Create a client session
-    async with aiohttp.ClientSession() as session:
-        # Wrap the coroutines as Future objects and put them into a list.
-        # Then, pass the list as tasks to be run.
-        tasks = []
-        for course in courses_to_search:
-            task = asyncio.ensure_future(fetch(session, start_url, course, course.split(' ')[0], course.split(' '), 0))
-            #print(course)
-            tasks.append(task)
-
-        await asyncio.gather(*tasks)
-
-if __name__ == '__main__':
-    parser = parser()
-    cmd_args = parser.parse_args()
-    print(cmd_args)
-    validate_cmd_args(cmd_args)
-
-    if has_sms_option:
-        client = Client(secret_id, twilio_auth_token)
-
-    if has_email_option:
-        email_server = smtplib.SMTP('smtp.gmail.com', 587)
-        email_server.starttls()
-        email_server.login(email_sender, email_password)
-
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    loop.run_until_complete(asyncio.ensure_future(crawl()))
 
     if email_server is not None:
         email_server.quit()
+
+if __name__ == '__main__':
+    main()
