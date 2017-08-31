@@ -3,8 +3,11 @@ import argparse
 import asyncio
 import async_timeout
 import re
+import smtplib
 
 from bs4 import BeautifulSoup
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from pathlib import Path
 from twilio.rest import Client
 from urllib.parse import urlparse
@@ -22,16 +25,20 @@ parser_type = 'html.parser'
 # Regex for line breaks and whitespace
 spaces_regex = '\n*\s*\n*'
 
-client = None
-email_recipient = None
-email_sender = None
-has_email_option = False
+# SMS
 has_sms_option = False
+client = None
 secret_id = None
 sms_recipient = None
 sms_sender = None
 twilio_auth_token = None
 
+# Email
+has_email_option = False
+email_server = None
+email_password = None
+email_recipient = None
+email_sender = None
 
 def read_file(file):
     with file.open() as f:
@@ -45,19 +52,21 @@ def read_file(file):
             courses_to_search.append(course)
 
 def parser():
-    parser = argparse.ArgumentParser(
-        description='Get notified when a UBC course seat is available'
-    )
-    parser.add_argument('-er', '-email_recipient', type=str, help='The email address to send a notification to.')
-    parser.add_argument('-es', '-email_sender', type=str, help='The email address of the sender.')
-    parser.add_argument('-sid', '-secret_id', type=str, help='Your Twilio account\'s secret ID.')
-    parser.add_argument('-sr', '-sms_recipient', type=str, help='The receiver of the SMS message.')
-    parser.add_argument('-ss', '-sms_sender', type=str, help='Your Twilio-managed phone number.')
-    parser.add_argument('-t', '-token', type=str, help='The Twilio authentication token.')
+    parser = argparse.ArgumentParser(description='Get notified when a UBC course seat is available')
+    parser.add_argument('-ep', '--email_password', type=str, help='Your email password')
+    parser.add_argument('-er', '--email_recipient', type=str, help='The email address to send a notification to')
+    parser.add_argument('-es', '--email_sender', type=str, help='The email address of the sender')
+    parser.add_argument('-sid', '--secret_id', type=str, help='Your Twilio account\'s secret ID')
+    parser.add_argument('-sr', '--sms_recipient', type=str, help='The phone number to receive the SMS message')
+    parser.add_argument('-ss', '--sms_sender', type=str, help='Your Twilio-managed phone number')
+    parser.add_argument('-t', '--token', type=str, help='Your Twilio authentication token')
     return parser
 
 def validate_cmd_args(cmd_args):
     email_args_count = 0
+
+    if 'ep' in cmd_args and cmd_args.ep:
+        email_args_count += 1
 
     if 'er' in cmd_args and cmd_args.er:
         email_args_count += 1
@@ -65,13 +74,14 @@ def validate_cmd_args(cmd_args):
     if 'es' in cmd_args and cmd_args.es:
         email_args_count += 1
 
-    if email_args_count == 2:
-        global has_email_option, email_recipient, email_sender
+    if email_args_count == 3:
+        global has_email_option, email_password, email_recipient, email_sender
         has_email_option = True
+        email_password = cmd_args.ep
         email_recipient = cmd_args.er
         email_sender = cmd_args.es
-    elif email_args_count == 1:
-        raise ValueError('Either Email sender or recipient are missing')
+    elif email_args_count > 0 and email_args_count < 3:
+        raise ValueError('One or more of the following arguments are missing: email password, sender or recipient')
 
     sms_args_count = 0
 
@@ -105,8 +115,7 @@ async def fetch(session, url, course, text_to_find, course_name_split, count):
     with async_timeout.timeout(10):
         async with session.get(url) as response:
             html_response = await response.text()
-            # print("done waiting for", text_to_find)
-            # print(course)
+
             soup = BeautifulSoup(html_response, parser_type)
                 
             if count > 2:
@@ -115,10 +124,13 @@ async def fetch(session, url, course, text_to_find, course_name_split, count):
                 if td_element is not None:
                     num_of_open_spots = int(td_element.find_next_sibling('td').strong.text)
 
-                    if has_sms_option and num_of_open_spots > 0:
-                        #await send_sms(course)
+                    if num_of_open_spots > 0:
+                        if has_sms_option:
+                            await send_sms(course)
+                        elif has_email_option:
+                            await send_email(course)
 
-                    print('There are', num_of_open_spots, 'open seats in', course)
+                    print('There are {} open seats in {}'.format(num_of_open_spots, course))
                 else:
                     print('Cannot find number of seats for', course)
             else:
@@ -139,12 +151,24 @@ async def fetch(session, url, course, text_to_find, course_name_split, count):
                     course_name_split,
                     count + 1
                 )
-                
+
+async def send_email(course):
+    msg = MIMEMultipart()
+    msg['From'] = email_sender
+    msg['To'] = email_recipient
+    msg['Subject'] = 'OpenSeat - {}'.format(course)
+
+    body = 'There is an open seat in {}.'.format(course)
+    msg.attach(MIMEText(body,'plain'))
+
+    msg_text = msg.as_string()
+    email_server.sendmail(email_sender, email_recipient, msg_text)
+
 async def send_sms(course):
     client.messages.create(
         to=sms_recipient,
         from_=sms_sender,
-        body='A spot is available in ' + course  + '.'
+        body='A spot is available in {}.'.format(course)
     )
 
 async def main():
@@ -170,7 +194,6 @@ async def main():
         
         await asyncio.gather(*tasks)
 
-
 if __name__ == '__main__':
     parser = parser()
     cmd_args = parser.parse_args()
@@ -180,5 +203,13 @@ if __name__ == '__main__':
     if has_sms_option:
         client = Client(secret_id, twilio_auth_token)
 
+    if has_email_option:
+        email_server = smtplib.SMTP('smtp.gmail.com', 587)
+        email_server.starttls()
+        email_server.login(email_sender, email_password)
+
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
+
+    if email_server is not None:
+        email_server.quit()
