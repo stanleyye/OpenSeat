@@ -2,12 +2,25 @@ import aiohttp
 import argparse
 import asyncio
 import async_timeout
+import re
+
+from bs4 import BeautifulSoup
 from pathlib import Path
 from twilio.rest import Client
+from urllib.parse import urlparse
 
 courses_file_name = 'courses.txt'
 courses_to_search = []
+total_seats_remaining_text = 'Total Seats Remaining:'
+
 start_url = 'https://courses.students.ubc.ca/cs/main?pname=subjarea&tname=subjareas&req=0'
+parsed_url = urlparse(start_url)
+# Domain is used because all the anchor tag links are relative
+domain = '{uri.scheme}://{uri.netloc}'.format(uri=parsed_url)
+
+parser_type = 'html.parser'
+# Regex for line breaks and whitespace
+spaces_regex = '\n*\s*\n*'
 
 client = None
 email_recipient = None
@@ -29,7 +42,6 @@ def read_file(file):
 
             # normalize the string to upper case + trimmed
             course = line.replace('\n', '').strip().upper()
-            print(course)
             courses_to_search.append(course)
 
 def parser():
@@ -45,9 +57,6 @@ def parser():
     return parser
 
 def validate_cmd_args(cmd_args):
-    if not cmd_args:
-        raise ValueError('No command arguments specified.')
-
     email_args_count = 0
 
     if 'er' in cmd_args and cmd_args.er:
@@ -67,7 +76,6 @@ def validate_cmd_args(cmd_args):
     sms_args_count = 0
 
     if 'sid' in cmd_args and cmd_args.sid:
-        print(cmd_args.sid)
         sms_args_count += 1
 
     if 'sr' in cmd_args and cmd_args.sr:
@@ -89,12 +97,55 @@ def validate_cmd_args(cmd_args):
     elif sms_args_count > 0 and sms_args_count < 4:
         raise ValueError('Missing either the Twilio auth token, Twio Secret ID, SMS Sender or the SMS Recipient')
 
+    if email_args_count == 0 and sms_args_count == 0:
+        raise ValueError('No command arguments specified.')
 
-async def fetch(session, url, course, course_name_split, course_name_split_length, count):
+async def fetch(session, url, course, text_to_find, course_name_split, count):
     # timeout if no response in 10 seconds
     with async_timeout.timeout(10):
         async with session.get(url) as response:
-            return await response.text()
+            html_response = await response.text()
+            # print("done waiting for", text_to_find)
+            # print(course)
+            soup = BeautifulSoup(html_response, parser_type)
+                
+            if count > 2:
+                td_element = soup.find('td', text=total_seats_remaining_text)
+
+                if td_element is not None:
+                    num_of_open_spots = int(td_element.find_next_sibling('td').strong.text)
+
+                    if has_sms_option and num_of_open_spots > 0:
+                        #await send_sms(course)
+
+                    print('There are', num_of_open_spots, 'open seats in', course)
+                else:
+                    print('Cannot find number of seats for', course)
+            else:
+                next_text_to_find = None
+
+                href_element = soup.find('a', text=re.compile(spaces_regex + text_to_find + spaces_regex))
+                href_element_link = href_element['href']
+                next_url = domain + href_element_link
+
+                if count < 2:
+                    next_text_to_find = text_to_find + ' ' + course_name_split[count + 1]
+
+                await fetch(
+                    session,
+                    next_url,
+                    course,
+                    next_text_to_find,
+                    course_name_split,
+                    count + 1
+                )
+                
+async def send_sms(course):
+    client.messages.create(
+        to=sms_recipient,
+        from_=sms_sender,
+        body='A spot is available in ' + course  + '.'
+    )
 
 async def main():
     courses = Path('./courses.txt')
@@ -104,19 +155,20 @@ async def main():
         print('courses.txt does not exist.')
         return
 
-    # read the file and put the courses into a list
+    # Read the file and put the courses into a list
     read_file(courses)
-    print(*courses_to_search, sep='\n')
 
-    # create a client session and then asynchronously check the course pages
+    # Create a client session
     async with aiohttp.ClientSession() as session:
-        futures = []
+        # Wrap the coroutines as Future objects and put them into a list.
+        # Then, pass the list as tasks to be run.
+        tasks = []
         for course in courses_to_search:
-            future = fetch(session, start_url, course, course.split(' '), len(course.split(' ')), 0)
-            print(future)
-            futures.append(future)
+            task = asyncio.ensure_future(fetch(session, start_url, course, course.split(' ')[0], course.split(' '), 0))
+            #print(course)
+            tasks.append(task)
         
-        await asyncio.gather(*futures)
+        await asyncio.gather(*tasks)
 
 
 if __name__ == '__main__':
@@ -125,7 +177,6 @@ if __name__ == '__main__':
     print(cmd_args)
     validate_cmd_args(cmd_args)
 
-    print(has_sms_option)
     if has_sms_option:
         client = Client(secret_id, twilio_auth_token)
 
