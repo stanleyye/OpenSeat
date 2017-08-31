@@ -2,6 +2,12 @@
 
 This script notifies you when a UBC course seat is available. 
 
+## Usage
+```bash
+python3 ./main.py [-h] [-ep EMAIL_PASSWORD] [-er EMAIL_RECIPIENT]
+    [-es EMAIL_SENDER] [-sid SECRET_ID] [-sr SMS_RECIPIENT]
+    [-ss SMS_SENDER] [-t TOKEN]
+```
 ## Requirements
 - Python 3.5+
 - Twilio for SMS
