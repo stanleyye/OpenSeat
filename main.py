@@ -23,6 +23,7 @@ parsed_url = urlparse(start_url)
 # Domain is used because all the anchor tag links are relative
 domain = '{uri.scheme}://{uri.netloc}'.format(uri=parsed_url)
 
+# BeautifulSoup parser type
 parser_type = 'html.parser'
 # Regex for line breaks and whitespace
 spaces_regex = '\n*\s*\n*'
@@ -43,6 +44,12 @@ email_recipient = None
 email_sender = None
 
 def parser():
+    """
+    Creates a command argument parser with specified flags.
+
+    Returns:
+        the created parser.
+    """
     parser = argparse.ArgumentParser(description='Get notified when a UBC course seat is available')
     parser.add_argument('-ep', '--email_password', type=str, help='Your email password')
     parser.add_argument('-er', '--email_recipient', type=str, help='The email address to send a notification to')
@@ -53,7 +60,14 @@ def parser():
     parser.add_argument('-t', '--token', type=str, help='Your Twilio authentication token')
     return parser
 
-def read_file(file):
+def read_course_file(file):
+    """
+    Reads the courses in the specified course file and adds it to a list of
+    course names.
+
+    Args:
+        file: the specified course file.
+    """
     with file.open() as f:
         for line in f:
             # if line is empty, continue
@@ -64,8 +78,16 @@ def read_file(file):
             course = line.replace('\n', '').strip().upper()
             courses_to_search.append(course)
 
-def select_smtp_address(email_sender):
-    split_email = email_sender.split('@')
+def select_smtp_address(email):
+    """
+    Select the right SMTP server address based on a specified email.
+
+    Args:
+        email: The specified email.
+    Returns:
+        the SMTP server address.
+    """
+    split_email = email.split('@')
     email_domain = split_email[1].lower()
 
     return {
@@ -81,7 +103,14 @@ def select_smtp_address(email_sender):
     }.get(email_domain, '')
 
 def validate_cmd_args(cmd_args):
-    print(cmd_args)
+    """
+    Validates the command arguments.
+
+    Args:
+        cmd_args: the command arguments.
+    Raises:
+        ValueError: if command arguments are missing.
+    """
     email_args_count = 0
 
     if 'email_password' in cmd_args and cmd_args.email_password:
@@ -130,7 +159,11 @@ def validate_cmd_args(cmd_args):
         raise ValueError('No command arguments specified.')
 
 async def crawl():
-        # Create a client session
+    """
+    Create an asyncio task for every course specified in courses.txt
+    """
+
+    # Create a client session
     async with aiohttp.ClientSession() as session:
         # Wrap the coroutines as Future objects and put them into a list.
         # Then, pass the list as tasks to be run.
@@ -143,6 +176,18 @@ async def crawl():
         await asyncio.gather(*tasks)
 
 async def fetch(session, url, course, text_to_find, course_name_split, count):
+    """
+    Gets the returned HTML from the response and parses it.
+
+    Args:
+        session: the aiohttp client session
+        url: the url to fetch (send a HTTP GET request to)
+        course: the course name
+        text_to_find: The text value to look for in the HTML
+        course_name_split: A list that consists of the split course name
+        count: a number to keep track of how many links traversed
+    """
+
     # timeout if no response in 10 seconds
     with async_timeout.timeout(10):
         async with session.get(url) as response:
@@ -185,6 +230,12 @@ async def fetch(session, url, course, text_to_find, course_name_split, count):
                 )
 
 async def send_email(course):
+    """
+    Sends an email.
+
+    Args:
+        course: The specified course (email subject)
+    """
     msg = MIMEMultipart()
     msg['From'] = email_sender
     msg['To'] = email_recipient
@@ -197,6 +248,12 @@ async def send_email(course):
     email_server.sendmail(email_sender, email_recipient, msg_text)
 
 async def send_sms(course):
+    """
+    Sends a SMS message.
+
+    Args:
+        course: The specified course (SMS subject)
+    """
     client.messages.create(
         to=sms_recipient,
         from_=sms_sender,
@@ -204,6 +261,10 @@ async def send_sms(course):
     )
 
 def main():
+    """
+    Main function. Initializes and sets up the variables for the program.
+    """
+
     # Set up the parser
     cmd_parser = parser()
     cmd_args = cmd_parser.parse_args()
@@ -233,7 +294,7 @@ def main():
         return
 
     # Read the file and put the courses into a list
-    read_file(courses)
+    read_course_file(courses)
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(asyncio.ensure_future(crawl()))
