@@ -42,4 +42,3 @@ python3 ./main.py [-h] [-ep EMAIL_PASSWORD] [-er EMAIL_RECIPIENT]
 
 ## TODO
 - differentiate between blocked, restricted and general seats
-- set frequency of checking. The script currently only checks once. Crontab?
