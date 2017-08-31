@@ -1,6 +1,6 @@
 # OpenSeat
 
-This self-hosted script notifies you when a UBC course seat is available. 
+A self-hosted Python script that notifies you when a UBC course seat is available. 
 
 ## Usage
 ```bash
