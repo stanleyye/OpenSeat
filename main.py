@@ -117,7 +117,7 @@ async def fetch(session, url, course, text_to_find, course_name_split, count):
             html_response = await response.text()
 
             soup = BeautifulSoup(html_response, parser_type)
-                
+
             if count > 2:
                 td_element = soup.find('td', text=total_seats_remaining_text)
 
@@ -191,7 +191,7 @@ async def main():
             task = asyncio.ensure_future(fetch(session, start_url, course, course.split(' ')[0], course.split(' '), 0))
             #print(course)
             tasks.append(task)
-        
+
         await asyncio.gather(*tasks)
 
 if __name__ == '__main__':
